@@ -1,0 +1,11 @@
+# 收集的原始数据文件（体积大，本地传输）
+hftbacktest_study/data_collector/data/
+hftbacktest_study/data_collector/collector.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/
