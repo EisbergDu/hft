@@ -61,15 +61,19 @@ class RotatingGzipWriter:
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self._current_date: str = ""
         self._file = None
+        # 新文件是否需要快照：每次日期切换后置 True，写入快照后置 False
+        self.needs_snapshot: bool = True
 
     def _open(self, date_str: str):
-        """打开新的日期文件"""
+        """打开新的日期文件，并标记需要拉取快照"""
         if self._file:
             self._file.close()
         path = self.base_dir / f"{self.symbol}_{date_str}.gz"
         self._file = gzip.open(path, "at", encoding="utf-8")
         self._current_date = date_str
-        logger.info(f"已开启新文件：{path}")
+        # 新文件头部必须有快照，否则 convert() 无法初始化订单簿
+        self.needs_snapshot = True
+        logger.info(f"已开启新文件：{path}，等待拉取快照...")
 
     def write(self, recv_ns: int, raw_json: str):
         """写入一条记录，recv_ns 为纳秒级 UTC 时间戳"""
@@ -169,16 +173,26 @@ async def collect(symbols: list[str], output_dir: str):
                         if not symbol or symbol not in writers:
                             continue
 
-                        # ── 深度断层检测 ──────────────────────────────────────
+                        # ── 深度断层检测 & 新文件快照 ─────────────────────────
                         if event == "depthUpdate":
                             u  = data.get("u")   # 本次 finalUpdateId
                             pu = data.get("pu")  # 上次 finalUpdateId（应与我们记录的一致）
 
                             expected = prev_u.get(symbol)
-                            # expected is None 表示首次收到 depthUpdate，与 Rust 版行为一致：
-                            # 启动时必须拉快照，否则订单簿初始状态为空，增量更新无法正确重建
-                            if expected is None or pu != expected:
-                                reason = "首次连接，初始化订单簿" if expected is None else f"深度断层：期望 pu={expected}，实际 pu={pu}"
+                            writer   = writers[symbol]
+
+                            # 三种情况需要拉快照：
+                            #   1. expected is None：程序刚启动，首次 depthUpdate
+                            #   2. pu != expected：序列号断层，有数据丢失
+                            #   3. writer.needs_snapshot：跨天换文件，新文件头部必须有快照
+                            need_snap = (expected is None) or (pu != expected) or writer.needs_snapshot
+                            if need_snap:
+                                if expected is None:
+                                    reason = "首次连接"
+                                elif writer.needs_snapshot:
+                                    reason = "新文件（跨天），需要初始快照"
+                                else:
+                                    reason = f"深度断层：期望 pu={expected}，实际 pu={pu}"
                                 logger.warning(f"{symbol} 拉取快照：{reason}")
                                 now = time.time()
                                 if now - last_snapshot_time.get(symbol, 0) >= SNAPSHOT_INTERVAL:
@@ -186,7 +200,9 @@ async def collect(symbols: list[str], output_dir: str):
                                     snap = await fetch_depth_snapshot(http_session, symbol)
                                     if snap:
                                         snap_ns = time.time_ns()
-                                        writers[symbol].write(snap_ns, snap)
+                                        writer.write(snap_ns, snap)
+                                        # 标记快照已写入，后续不再重复拉取
+                                        writer.needs_snapshot = False
 
                             if u is not None:
                                 prev_u[symbol] = u  # 更新最新的 finalUpdateId
