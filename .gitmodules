@@ -1,0 +1,3 @@
+[submodule "hftbacktest_study/hftbacktest"]
+	path = hftbacktest_study/hftbacktest
+	url = https://github.com/EisbergDu/hftbacktest.git
