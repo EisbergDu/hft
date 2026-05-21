@@ -175,11 +175,11 @@ async def collect(symbols: list[str], output_dir: str):
                             pu = data.get("pu")  # 上次 finalUpdateId（应与我们记录的一致）
 
                             expected = prev_u.get(symbol)
-                            if expected is not None and pu != expected:
-                                # 序列号对不上，说明有数据丢失，需要拉快照重建订单簿
-                                logger.warning(
-                                    f"{symbol} 深度断层：期望 pu={expected}，实际 pu={pu}，拉取快照..."
-                                )
+                            # expected is None 表示首次收到 depthUpdate，与 Rust 版行为一致：
+                            # 启动时必须拉快照，否则订单簿初始状态为空，增量更新无法正确重建
+                            if expected is None or pu != expected:
+                                reason = "首次连接，初始化订单簿" if expected is None else f"深度断层：期望 pu={expected}，实际 pu={pu}"
+                                logger.warning(f"{symbol} 拉取快照：{reason}")
                                 now = time.time()
                                 if now - last_snapshot_time.get(symbol, 0) >= SNAPSHOT_INTERVAL:
                                     last_snapshot_time[symbol] = now
